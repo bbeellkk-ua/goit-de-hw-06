@@ -1,0 +1,10 @@
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+__pycache__
+*.py[cod]
+.pytest_cache
+checkpoints
+screenshots

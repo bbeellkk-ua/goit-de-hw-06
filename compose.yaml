@@ -1,0 +1,125 @@
+x-app-service: &app-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  working_dir: /workspace
+  environment: &app-environment
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    TOPIC_PREFIX: goit
+  restart: unless-stopped
+
+services:
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: goit-de-hw-06-kafka
+    hostname: kafka
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:9092,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:39092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "39092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  topics-init:
+    <<: *app-service
+    container_name: goit-de-hw-06-topics-init
+    command: ["python", "src/create_topics.py"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  spark-processor:
+    <<: *app-service
+    container_name: goit-de-hw-06-spark-processor
+    command:
+      - spark-submit
+      - --master
+      - local[*]
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5
+      - --conf
+      - spark.jars.ivy=/opt/spark-ivy
+      - --conf
+      - spark.sql.shuffle.partitions=4
+      - src/spark_streaming.py
+    environment:
+      <<: *app-environment
+      ALERTS_CONDITIONS_PATH: /workspace/data/alerts_conditions.csv
+      SPARK_CHECKPOINT_DIR: /checkpoints/alerts
+      SPARK_TRIGGER_INTERVAL: 5 seconds
+      SPARK_LOCAL_IP: 127.0.0.1
+    ports:
+      - "4040:4040"
+    volumes:
+      - ./data:/workspace/data:ro
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      topics-init:
+        condition: service_completed_successfully
+
+  alerts-consumer:
+    <<: *app-service
+    container_name: goit-de-hw-06-alerts-consumer
+    command: ["python", "src/alerts_consumer.py"]
+    depends_on:
+      topics-init:
+        condition: service_completed_successfully
+
+  sensor-1:
+    <<: *app-service
+    container_name: goit-de-hw-06-sensor-1
+    command: ["python", "src/sensor_producer.py"]
+    environment:
+      <<: *app-environment
+      SENSOR_ID: sensor-1
+      SENSOR_INTERVAL_SECONDS: 2
+      TEMPERATURE_MIN: 41
+      TEMPERATURE_MAX: 48
+      HUMIDITY_MIN: 15
+      HUMIDITY_MAX: 35
+    depends_on:
+      topics-init:
+        condition: service_completed_successfully
+
+  sensor-2:
+    <<: *app-service
+    container_name: goit-de-hw-06-sensor-2
+    command: ["python", "src/sensor_producer.py"]
+    environment:
+      <<: *app-environment
+      SENSOR_ID: sensor-2
+      SENSOR_INTERVAL_SECONDS: 2
+      TEMPERATURE_MIN: 42
+      TEMPERATURE_MAX: 49
+      HUMIDITY_MIN: 15
+      HUMIDITY_MAX: 35
+    depends_on:
+      topics-init:
+        condition: service_completed_successfully
+
+volumes:
+  kafka-data:
+  spark-checkpoints:
